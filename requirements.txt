@@ -2,8 +2,8 @@ streamlit
 pdfplumber
 pandas
 openpyxl
-python_docs
+python_docx
 PyMuPDF
 pytesseract
 Pillow
-qr code
+qrcode
