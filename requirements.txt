@@ -6,3 +6,4 @@ python_docs
 PyMuPDF
 pytesseract
 Pillow
+qr code
