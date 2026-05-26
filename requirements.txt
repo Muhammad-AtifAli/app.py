@@ -7,3 +7,4 @@ PyMuPDF
 pytesseract
 Pillow
 qrcode
+reportlab
