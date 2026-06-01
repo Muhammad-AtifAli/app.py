@@ -5,17 +5,38 @@ from PIL import Image
 from docx import Document
 from io import BytesIO
 import re
+import platform
+import shutil
 
 
 # =========================================================
-# TESSERACT PATH FOR WINDOWS
+# TESSERACT SETUP
 # =========================================================
-# If your Tesseract is installed in a different location, change this path.
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+def setup_tesseract():
+    """
+    Sets Tesseract path only for Windows.
+    On Streamlit Cloud/Linux, it uses system-installed tesseract.
+    """
+    system_name = platform.system()
+
+    if system_name == "Windows":
+        windows_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+        if shutil.which("tesseract"):
+            pytesseract.pytesseract.tesseract_cmd = shutil.which("tesseract")
+        else:
+            pytesseract.pytesseract.tesseract_cmd = windows_path
+
+    else:
+        # Streamlit Cloud/Linux
+        pytesseract.pytesseract.tesseract_cmd = "tesseract"
+
+
+setup_tesseract()
 
 
 # =========================================================
-# STREAMLIT PAGE SETTINGS
+# STREAMLIT SETTINGS
 # =========================================================
 st.set_page_config(
     page_title="PDF Text Extractor",
@@ -25,7 +46,7 @@ st.set_page_config(
 
 
 # =========================================================
-# CUSTOM DESIGN
+# DESIGN
 # =========================================================
 st.markdown(
     """
@@ -43,9 +64,9 @@ st.markdown(
         color: #555;
         margin-bottom: 30px;
     }
-    .box {
+    .info-box {
         background-color: #F5F8FF;
-        padding: 20px;
+        padding: 18px;
         border-radius: 12px;
         border: 1px solid #D9E6F2;
         margin-bottom: 20px;
@@ -55,56 +76,64 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.markdown('<div class="main-title">📄 PDF Text Extractor App</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="sub-title">Extract text from searchable PDFs and scanned image PDFs. Download as TXT or Word file.</div>',
+    '<div class="main-title">📄 PDF Text Extractor App</div>',
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    '<div class="sub-title">Extract text from searchable and scanned PDFs. Download as TXT or Word file.</div>',
     unsafe_allow_html=True
 )
 
 
 # =========================================================
-# TEXT CLEANING FUNCTION
+# CLEANING FUNCTIONS
 # =========================================================
-def clean_text_for_word(text):
+def clean_text(text):
     """
-    Removes hidden characters that create errors in Word/XML files.
-    """
-    if text is None:
-        return ""
-
-    # Remove NULL bytes
-    text = text.replace("\x00", "")
-
-    # Remove illegal XML control characters
-    text = re.sub(r"[\x01-\x08\x0B\x0C\x0E-\x1F]", "", text)
-
-    return text
-
-
-def clean_general_text(text):
-    """
-    General text cleaning for preview and download.
+    Cleans text for TXT, preview, and Word export.
+    Removes illegal characters that break Word files.
     """
     if text is None:
         return ""
 
     text = text.replace("\x00", "")
     text = re.sub(r"[\x01-\x08\x0B\x0C\x0E-\x1F]", "", text)
-
-    # Remove too many empty lines
     text = re.sub(r"\n{4,}", "\n\n\n", text)
 
     return text.strip()
 
 
 # =========================================================
-# SEARCHABLE PDF TEXT EXTRACTION
+# CHECK TESSERACT
+# =========================================================
+def is_tesseract_available():
+    """
+    Checks whether Tesseract OCR is available.
+    """
+    try:
+        pytesseract.get_tesseract_version()
+        return True
+    except Exception:
+        return False
+
+
+def is_language_available(language_code):
+    """
+    Checks whether selected OCR language is installed.
+    """
+    try:
+        available_langs = pytesseract.get_languages(config="")
+        return language_code in available_langs
+    except Exception:
+        return False
+
+
+# =========================================================
+# SEARCHABLE PDF EXTRACTION
 # =========================================================
 def extract_searchable_pdf_text(pdf_bytes):
-    """
-    Extracts text from searchable PDFs.
-    Works for multiple pages.
-    """
     extracted_text = ""
 
     pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -120,23 +149,19 @@ def extract_searchable_pdf_text(pdf_bytes):
         extracted_text += f"\n\n================ Page {page_number + 1} ================\n\n"
         extracted_text += page_text
 
-        progress = int((page_number + 1) / total_pages * 100)
+        progress = int(((page_number + 1) / total_pages) * 100)
         progress_bar.progress(progress)
         status_text.write(f"Processing page {page_number + 1} of {total_pages}")
 
     pdf_document.close()
 
-    return clean_general_text(extracted_text)
+    return clean_text(extracted_text)
 
 
 # =========================================================
-# SCANNED PDF OCR EXTRACTION
+# OCR EXTRACTION
 # =========================================================
 def extract_scanned_pdf_text(pdf_bytes, dpi=200, language="eng"):
-    """
-    Converts each PDF page into image and applies OCR.
-    Works for multiple pages.
-    """
     extracted_text = ""
 
     pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -151,7 +176,6 @@ def extract_scanned_pdf_text(pdf_bytes, dpi=200, language="eng"):
     for page_number in range(total_pages):
         page = pdf_document[page_number]
 
-        # Convert PDF page to image
         pix = page.get_pixmap(matrix=matrix, alpha=False)
 
         image = Image.frombytes(
@@ -160,30 +184,24 @@ def extract_scanned_pdf_text(pdf_bytes, dpi=200, language="eng"):
             pix.samples
         )
 
-        # OCR
         page_text = pytesseract.image_to_string(image, lang=language)
 
-        extracted_text += f"\n\n================ Page {page_number + 1} ================\n\n"
+        extracted_text += f"\n\n================ Page {page_number + 1} OCR ================\n\n"
         extracted_text += page_text
 
-        progress = int((page_number + 1) / total_pages * 100)
+        progress = int(((page_number + 1) / total_pages) * 100)
         progress_bar.progress(progress)
         status_text.write(f"OCR processing page {page_number + 1} of {total_pages}")
 
     pdf_document.close()
 
-    return clean_general_text(extracted_text)
+    return clean_text(extracted_text)
 
 
 # =========================================================
-# AUTO DETECTION EXTRACTION
+# AUTO MODE EXTRACTION
 # =========================================================
 def auto_extract_pdf_text(pdf_bytes, dpi=200, language="eng"):
-    """
-    First tries direct text extraction.
-    If text is too little, OCR is applied page by page.
-    This works better for mixed PDFs too.
-    """
     extracted_text = ""
 
     pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -201,16 +219,12 @@ def auto_extract_pdf_text(pdf_bytes, dpi=200, language="eng"):
     for page_number in range(total_pages):
         page = pdf_document[page_number]
 
-        # First try direct text extraction
         page_text = page.get_text("text").strip()
 
-        # If page has enough selectable text, use it
         if len(page_text) > 30:
             searchable_pages += 1
-            final_page_text = page_text
-            mode_used = "Searchable text"
-
-        # Otherwise use OCR for that page
+            final_text = page_text
+            mode = "Searchable Text"
         else:
             ocr_pages += 1
 
@@ -222,13 +236,13 @@ def auto_extract_pdf_text(pdf_bytes, dpi=200, language="eng"):
                 pix.samples
             )
 
-            final_page_text = pytesseract.image_to_string(image, lang=language)
-            mode_used = "OCR"
+            final_text = pytesseract.image_to_string(image, lang=language)
+            mode = "OCR"
 
-        extracted_text += f"\n\n================ Page {page_number + 1} ({mode_used}) ================\n\n"
-        extracted_text += final_page_text
+        extracted_text += f"\n\n================ Page {page_number + 1} ({mode}) ================\n\n"
+        extracted_text += final_text
 
-        progress = int((page_number + 1) / total_pages * 100)
+        progress = int(((page_number + 1) / total_pages) * 100)
         progress_bar.progress(progress)
         status_text.write(f"Processing page {page_number + 1} of {total_pages}")
 
@@ -236,17 +250,14 @@ def auto_extract_pdf_text(pdf_bytes, dpi=200, language="eng"):
 
     message = f"Completed. Searchable pages: {searchable_pages}, OCR pages: {ocr_pages}"
 
-    return clean_general_text(extracted_text), message
+    return clean_text(extracted_text), message
 
 
 # =========================================================
 # TXT FILE CREATION
 # =========================================================
 def create_txt_file(text):
-    """
-    Creates TXT file from extracted text.
-    """
-    text = clean_general_text(text)
+    text = clean_text(text)
 
     txt_buffer = BytesIO()
     txt_buffer.write(text.encode("utf-8", errors="ignore"))
@@ -259,42 +270,34 @@ def create_txt_file(text):
 # WORD FILE CREATION
 # =========================================================
 def create_word_file(text):
-    """
-    Creates Word file safely.
-    Handles long and multiple-page text.
-    """
-    text = clean_text_for_word(text)
+    text = clean_text(text)
 
     document = Document()
     document.add_heading("Extracted PDF Text", level=1)
 
-    # Split page-wise
-    pages = re.split(r"=+\s*Page\s+", text)
+    page_parts = re.split(r"=+\s*Page\s+", text)
 
-    for index, page_text in enumerate(pages):
-        page_text = page_text.strip()
+    page_counter = 0
 
-        if not page_text:
+    for part in page_parts:
+        part = part.strip()
+
+        if not part:
             continue
 
-        # Add page heading
-        if index == 0 and not page_text.lower().startswith("1"):
-            document.add_paragraph(page_text)
-        else:
-            document.add_heading(f"Page {index}", level=2)
+        page_counter += 1
+        document.add_heading(f"Page {page_counter}", level=2)
 
-            # Split large text into smaller paragraphs
-            paragraphs = page_text.split("\n")
+        lines = part.split("\n")
 
-            for para in paragraphs:
-                para = clean_text_for_word(para.strip())
+        for line in lines:
+            line = clean_text(line)
 
-                if para:
-                    # Word paragraph has practical limits, so chunk long paragraphs
-                    chunk_size = 3000
+            if line:
+                chunk_size = 2500
 
-                    for i in range(0, len(para), chunk_size):
-                        document.add_paragraph(para[i:i + chunk_size])
+                for i in range(0, len(line), chunk_size):
+                    document.add_paragraph(line[i:i + chunk_size])
 
     word_buffer = BytesIO()
     document.save(word_buffer)
@@ -304,7 +307,7 @@ def create_word_file(text):
 
 
 # =========================================================
-# SIDEBAR SETTINGS
+# SIDEBAR
 # =========================================================
 st.sidebar.header("⚙️ Extraction Settings")
 
@@ -342,27 +345,43 @@ ocr_language = st.sidebar.selectbox(
     index=0
 )
 
-st.sidebar.warning(
-    "For Urdu OCR, Urdu language data must be installed in Tesseract. "
-    "For English PDFs, keep language as eng."
+st.sidebar.info(
+    "Use 'eng' for English PDFs. Use 'urd' only if Urdu OCR language is installed."
 )
 
 
 # =========================================================
-# MAIN FILE UPLOADER
+# OCR STATUS
 # =========================================================
-st.markdown('<div class="box">', unsafe_allow_html=True)
+tesseract_available = is_tesseract_available()
 
+if tesseract_available:
+    st.sidebar.success("Tesseract OCR is available.")
+else:
+    st.sidebar.error("Tesseract OCR is not available.")
+
+selected_language_available = False
+
+if tesseract_available:
+    selected_language_available = is_language_available(ocr_language)
+
+    if selected_language_available:
+        st.sidebar.success(f"OCR language available: {ocr_language}")
+    else:
+        st.sidebar.warning(f"OCR language not available: {ocr_language}")
+
+
+# =========================================================
+# FILE UPLOADER
+# =========================================================
 uploaded_pdf = st.file_uploader(
     "Upload your PDF file",
     type=["pdf"]
 )
 
-st.markdown('</div>', unsafe_allow_html=True)
-
 
 # =========================================================
-# MAIN APP LOGIC
+# MAIN LOGIC
 # =========================================================
 if uploaded_pdf is not None:
     st.success("PDF uploaded successfully.")
@@ -389,6 +408,20 @@ if uploaded_pdf is not None:
                     extraction_message = "Direct text extraction completed."
 
                 elif extraction_mode == "Scanned PDF OCR Only":
+                    if not tesseract_available:
+                        st.error(
+                            "Tesseract OCR is not installed on the server. "
+                            "Add packages.txt in GitHub and redeploy the app."
+                        )
+                        st.stop()
+
+                    if not selected_language_available:
+                        st.error(
+                            f"The selected OCR language '{ocr_language}' is not installed. "
+                            "Add it in packages.txt or select another language."
+                        )
+                        st.stop()
+
                     extracted_text = extract_scanned_pdf_text(
                         pdf_bytes,
                         dpi=ocr_dpi,
@@ -397,19 +430,47 @@ if uploaded_pdf is not None:
                     extraction_message = "OCR extraction completed."
 
                 else:
-                    extracted_text, extraction_message = auto_extract_pdf_text(
-                        pdf_bytes,
-                        dpi=ocr_dpi,
-                        language=ocr_language
-                    )
+                    # Auto Detect
+                    # First check whether the PDF already has searchable text.
+                    test_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                    test_text = ""
 
-                extracted_text = clean_general_text(extracted_text)
+                    for page in test_doc:
+                        test_text += page.get_text("text").strip()
+
+                    test_doc.close()
+
+                    if len(test_text) > 30:
+                        extracted_text = extract_searchable_pdf_text(pdf_bytes)
+                        extraction_message = "Searchable PDF detected. Direct extraction completed."
+                    else:
+                        if not tesseract_available:
+                            st.error(
+                                "This PDF seems scanned, but Tesseract OCR is not installed on the server. "
+                                "Add packages.txt in GitHub and redeploy the app."
+                            )
+                            st.stop()
+
+                        if not selected_language_available:
+                            st.error(
+                                f"This PDF needs OCR, but OCR language '{ocr_language}' is not installed."
+                            )
+                            st.stop()
+
+                        extracted_text = extract_scanned_pdf_text(
+                            pdf_bytes,
+                            dpi=ocr_dpi,
+                            language=ocr_language
+                        )
+                        extraction_message = "Scanned PDF detected. OCR extraction completed."
+
+                extracted_text = clean_text(extracted_text)
 
             st.success(extraction_message)
 
             if not extracted_text:
                 st.warning(
-                    "No text was extracted. The PDF may be handwritten, blurred, damaged, "
+                    "No text was extracted. The PDF may be blurred, handwritten, damaged, "
                     "or the OCR language may not be installed."
                 )
 
@@ -434,7 +495,7 @@ if uploaded_pdf is not None:
                         mime="text/plain"
                     )
 
-                elif output_type == "Word File":
+                else:
                     word_file = create_word_file(extracted_text)
 
                     st.download_button(
@@ -443,12 +504,6 @@ if uploaded_pdf is not None:
                         file_name="extracted_pdf_text.docx",
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     )
-
-        except pytesseract.TesseractNotFoundError:
-            st.error(
-                "Tesseract OCR is not installed or the path is incorrect. "
-                "Please install Tesseract and check the path in the code."
-            )
 
         except Exception as e:
             st.error("An error occurred while extracting text.")
