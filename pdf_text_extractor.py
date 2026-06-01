@@ -4,78 +4,155 @@ import pytesseract
 from PIL import Image
 from docx import Document
 from io import BytesIO
-import os
+import re
 
 
-# ---------------------------------------
-# Tesseract OCR Path for Windows
-# ---------------------------------------
-# Change this path only if Tesseract is installed somewhere else.
+# =========================================================
+# TESSERACT PATH FOR WINDOWS
+# =========================================================
+# If your Tesseract is installed in a different location, change this path.
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 
-# ---------------------------------------
-# Streamlit Page Settings
-# ---------------------------------------
+# =========================================================
+# STREAMLIT PAGE SETTINGS
+# =========================================================
 st.set_page_config(
     page_title="PDF Text Extractor",
     page_icon="📄",
-    layout="centered"
-)
-
-st.title("📄 PDF Text Extractor App")
-st.write(
-    "Upload a PDF file. This app can extract text from both searchable PDFs "
-    "and scanned image-based PDFs using OCR."
+    layout="wide"
 )
 
 
-# ---------------------------------------
-# Function 1: Extract Text from Searchable PDF
-# ---------------------------------------
-def extract_searchable_pdf_text(pdf_file):
+# =========================================================
+# CUSTOM DESIGN
+# =========================================================
+st.markdown(
     """
-    This function extracts text directly from searchable PDFs.
-    Searchable PDFs are those where text can be selected or copied.
+    <style>
+    .main-title {
+        text-align: center;
+        color: #1F4E79;
+        font-size: 42px;
+        font-weight: bold;
+        margin-bottom: 10px;
+    }
+    .sub-title {
+        text-align: center;
+        font-size: 18px;
+        color: #555;
+        margin-bottom: 30px;
+    }
+    .box {
+        background-color: #F5F8FF;
+        padding: 20px;
+        border-radius: 12px;
+        border: 1px solid #D9E6F2;
+        margin-bottom: 20px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+st.markdown('<div class="main-title">📄 PDF Text Extractor App</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="sub-title">Extract text from searchable PDFs and scanned image PDFs. Download as TXT or Word file.</div>',
+    unsafe_allow_html=True
+)
+
+
+# =========================================================
+# TEXT CLEANING FUNCTION
+# =========================================================
+def clean_text_for_word(text):
+    """
+    Removes hidden characters that create errors in Word/XML files.
+    """
+    if text is None:
+        return ""
+
+    # Remove NULL bytes
+    text = text.replace("\x00", "")
+
+    # Remove illegal XML control characters
+    text = re.sub(r"[\x01-\x08\x0B\x0C\x0E-\x1F]", "", text)
+
+    return text
+
+
+def clean_general_text(text):
+    """
+    General text cleaning for preview and download.
+    """
+    if text is None:
+        return ""
+
+    text = text.replace("\x00", "")
+    text = re.sub(r"[\x01-\x08\x0B\x0C\x0E-\x1F]", "", text)
+
+    # Remove too many empty lines
+    text = re.sub(r"\n{4,}", "\n\n\n", text)
+
+    return text.strip()
+
+
+# =========================================================
+# SEARCHABLE PDF TEXT EXTRACTION
+# =========================================================
+def extract_searchable_pdf_text(pdf_bytes):
+    """
+    Extracts text from searchable PDFs.
+    Works for multiple pages.
     """
     extracted_text = ""
 
-    pdf_bytes = pdf_file.read()
     pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
+    total_pages = len(pdf_document)
 
-    for page_number in range(len(pdf_document)):
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+
+    for page_number in range(total_pages):
         page = pdf_document[page_number]
-        page_text = page.get_text()
+        page_text = page.get_text("text")
 
-        extracted_text += f"\n\n--- Page {page_number + 1} ---\n\n"
+        extracted_text += f"\n\n================ Page {page_number + 1} ================\n\n"
         extracted_text += page_text
 
+        progress = int((page_number + 1) / total_pages * 100)
+        progress_bar.progress(progress)
+        status_text.write(f"Processing page {page_number + 1} of {total_pages}")
+
     pdf_document.close()
-    return extracted_text.strip()
+
+    return clean_general_text(extracted_text)
 
 
-# ---------------------------------------
-# Function 2: OCR for Scanned PDF
-# ---------------------------------------
-def extract_scanned_pdf_text(pdf_file, dpi=300, language="eng"):
+# =========================================================
+# SCANNED PDF OCR EXTRACTION
+# =========================================================
+def extract_scanned_pdf_text(pdf_bytes, dpi=200, language="eng"):
     """
-    This function converts each PDF page into an image
-    and then uses OCR to extract text from it.
-    This is useful for scanned PDFs.
+    Converts each PDF page into image and applies OCR.
+    Works for multiple pages.
     """
     extracted_text = ""
 
-    pdf_bytes = pdf_file.read()
     pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
+    total_pages = len(pdf_document)
 
     zoom = dpi / 72
     matrix = fitz.Matrix(zoom, zoom)
 
-    for page_number in range(len(pdf_document)):
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+
+    for page_number in range(total_pages):
         page = pdf_document[page_number]
 
         # Convert PDF page to image
-        pix = page.get_pixmap(matrix=matrix)
+        pix = page.get_pixmap(matrix=matrix, alpha=False)
 
         image = Image.frombytes(
             "RGB",
@@ -83,49 +160,61 @@ def extract_scanned_pdf_text(pdf_file, dpi=300, language="eng"):
             pix.samples
         )
 
-        # OCR text extraction
+        # OCR
         page_text = pytesseract.image_to_string(image, lang=language)
 
-        extracted_text += f"\n\n--- Page {page_number + 1} ---\n\n"
+        extracted_text += f"\n\n================ Page {page_number + 1} ================\n\n"
         extracted_text += page_text
 
+        progress = int((page_number + 1) / total_pages * 100)
+        progress_bar.progress(progress)
+        status_text.write(f"OCR processing page {page_number + 1} of {total_pages}")
+
     pdf_document.close()
-    return extracted_text.strip()
+
+    return clean_general_text(extracted_text)
 
 
-# ---------------------------------------
-# Function 3: Auto Detect PDF Type
-# ---------------------------------------
-def auto_extract_pdf_text(pdf_file, dpi=300, language="eng"):
+# =========================================================
+# AUTO DETECTION EXTRACTION
+# =========================================================
+def auto_extract_pdf_text(pdf_bytes, dpi=200, language="eng"):
     """
-    This function first tries direct extraction.
-    If very little text is found, it uses OCR automatically.
+    First tries direct text extraction.
+    If text is too little, OCR is applied page by page.
+    This works better for mixed PDFs too.
     """
-    pdf_bytes = pdf_file.read()
+    extracted_text = ""
+
     pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
+    total_pages = len(pdf_document)
 
-    direct_text = ""
+    zoom = dpi / 72
+    matrix = fitz.Matrix(zoom, zoom)
 
-    for page_number in range(len(pdf_document)):
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+
+    searchable_pages = 0
+    ocr_pages = 0
+
+    for page_number in range(total_pages):
         page = pdf_document[page_number]
-        page_text = page.get_text()
 
-        direct_text += f"\n\n--- Page {page_number + 1} ---\n\n"
-        direct_text += page_text
+        # First try direct text extraction
+        page_text = page.get_text("text").strip()
 
-    pdf_document.close()
+        # If page has enough selectable text, use it
+        if len(page_text) > 30:
+            searchable_pages += 1
+            final_page_text = page_text
+            mode_used = "Searchable text"
 
-    # If direct text is very small, use OCR
-    if len(direct_text.strip()) < 50:
-        pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
-        extracted_text = ""
+        # Otherwise use OCR for that page
+        else:
+            ocr_pages += 1
 
-        zoom = dpi / 72
-        matrix = fitz.Matrix(zoom, zoom)
-
-        for page_number in range(len(pdf_document)):
-            page = pdf_document[page_number]
-            pix = page.get_pixmap(matrix=matrix)
+            pix = page.get_pixmap(matrix=matrix, alpha=False)
 
             image = Image.frombytes(
                 "RGB",
@@ -133,35 +222,79 @@ def auto_extract_pdf_text(pdf_file, dpi=300, language="eng"):
                 pix.samples
             )
 
-            page_text = pytesseract.image_to_string(image, lang=language)
+            final_page_text = pytesseract.image_to_string(image, lang=language)
+            mode_used = "OCR"
 
-            extracted_text += f"\n\n--- Page {page_number + 1} ---\n\n"
-            extracted_text += page_text
+        extracted_text += f"\n\n================ Page {page_number + 1} ({mode_used}) ================\n\n"
+        extracted_text += final_page_text
 
-        pdf_document.close()
-        return extracted_text.strip(), "OCR mode was used because this PDF seems scanned."
+        progress = int((page_number + 1) / total_pages * 100)
+        progress_bar.progress(progress)
+        status_text.write(f"Processing page {page_number + 1} of {total_pages}")
 
-    else:
-        return direct_text.strip(), "Direct text extraction was used because this PDF seems searchable."
+    pdf_document.close()
+
+    message = f"Completed. Searchable pages: {searchable_pages}, OCR pages: {ocr_pages}"
+
+    return clean_general_text(extracted_text), message
 
 
-# ---------------------------------------
-# Function 4: Convert Extracted Text to Word File
-# ---------------------------------------
+# =========================================================
+# TXT FILE CREATION
+# =========================================================
+def create_txt_file(text):
+    """
+    Creates TXT file from extracted text.
+    """
+    text = clean_general_text(text)
+
+    txt_buffer = BytesIO()
+    txt_buffer.write(text.encode("utf-8", errors="ignore"))
+    txt_buffer.seek(0)
+
+    return txt_buffer
+
+
+# =========================================================
+# WORD FILE CREATION
+# =========================================================
 def create_word_file(text):
     """
-    This function creates a Word document from extracted text.
+    Creates Word file safely.
+    Handles long and multiple-page text.
     """
+    text = clean_text_for_word(text)
+
     document = Document()
     document.add_heading("Extracted PDF Text", level=1)
 
-    pages = text.split("--- Page")
+    # Split page-wise
+    pages = re.split(r"=+\s*Page\s+", text)
 
-    for page in pages:
-        page = page.strip()
+    for index, page_text in enumerate(pages):
+        page_text = page_text.strip()
 
-        if page:
-            document.add_paragraph("--- Page " + page)
+        if not page_text:
+            continue
+
+        # Add page heading
+        if index == 0 and not page_text.lower().startswith("1"):
+            document.add_paragraph(page_text)
+        else:
+            document.add_heading(f"Page {index}", level=2)
+
+            # Split large text into smaller paragraphs
+            paragraphs = page_text.split("\n")
+
+            for para in paragraphs:
+                para = clean_text_for_word(para.strip())
+
+                if para:
+                    # Word paragraph has practical limits, so chunk long paragraphs
+                    chunk_size = 3000
+
+                    for i in range(0, len(para), chunk_size):
+                        document.add_paragraph(para[i:i + chunk_size])
 
     word_buffer = BytesIO()
     document.save(word_buffer)
@@ -170,27 +303,13 @@ def create_word_file(text):
     return word_buffer
 
 
-# ---------------------------------------
-# Function 5: Convert Extracted Text to TXT File
-# ---------------------------------------
-def create_txt_file(text):
-    """
-    This function creates a TXT file from extracted text.
-    """
-    txt_buffer = BytesIO()
-    txt_buffer.write(text.encode("utf-8"))
-    txt_buffer.seek(0)
-
-    return txt_buffer
-
-
-# ---------------------------------------
-# Sidebar Options
-# ---------------------------------------
+# =========================================================
+# SIDEBAR SETTINGS
+# =========================================================
 st.sidebar.header("⚙️ Extraction Settings")
 
 extraction_mode = st.sidebar.radio(
-    "Select extraction mode:",
+    "Select extraction mode",
     [
         "Auto Detect",
         "Searchable PDF Only",
@@ -199,7 +318,7 @@ extraction_mode = st.sidebar.radio(
 )
 
 output_type = st.sidebar.radio(
-    "Select output file type:",
+    "Select output file type",
     [
         "TXT File",
         "Word File"
@@ -209,8 +328,8 @@ output_type = st.sidebar.radio(
 ocr_dpi = st.sidebar.slider(
     "OCR Image Quality DPI",
     min_value=150,
-    max_value=400,
-    value=300,
+    max_value=300,
+    value=200,
     step=50
 )
 
@@ -223,91 +342,117 @@ ocr_language = st.sidebar.selectbox(
     index=0
 )
 
-st.sidebar.info(
-    "Use 'eng' for English PDFs. Use 'urd' for Urdu PDFs only if Urdu OCR language is installed in Tesseract."
+st.sidebar.warning(
+    "For Urdu OCR, Urdu language data must be installed in Tesseract. "
+    "For English PDFs, keep language as eng."
 )
 
 
-# ---------------------------------------
-# File Upload Section
-# ---------------------------------------
+# =========================================================
+# MAIN FILE UPLOADER
+# =========================================================
+st.markdown('<div class="box">', unsafe_allow_html=True)
+
 uploaded_pdf = st.file_uploader(
     "Upload your PDF file",
     type=["pdf"]
 )
 
+st.markdown('</div>', unsafe_allow_html=True)
 
-# ---------------------------------------
-# Main App Logic
-# ---------------------------------------
+
+# =========================================================
+# MAIN APP LOGIC
+# =========================================================
 if uploaded_pdf is not None:
     st.success("PDF uploaded successfully.")
 
-    if st.button("Extract Text"):
-        with st.spinner("Extracting text from PDF... Please wait."):
-            try:
-                # Reset file pointer before extraction
-                uploaded_pdf.seek(0)
+    pdf_bytes = uploaded_pdf.getvalue()
+
+    try:
+        pdf_check = fitz.open(stream=pdf_bytes, filetype="pdf")
+        total_pages = len(pdf_check)
+        pdf_check.close()
+
+        st.info(f"Total pages detected: {total_pages}")
+
+    except Exception:
+        st.error("This file could not be opened as a valid PDF.")
+        st.stop()
+
+    if st.button("🚀 Extract Text"):
+        try:
+            with st.spinner("Extracting text. Please wait..."):
 
                 if extraction_mode == "Searchable PDF Only":
-                    extracted_text = extract_searchable_pdf_text(uploaded_pdf)
-                    message = "Direct text extraction completed."
+                    extracted_text = extract_searchable_pdf_text(pdf_bytes)
+                    extraction_message = "Direct text extraction completed."
 
                 elif extraction_mode == "Scanned PDF OCR Only":
                     extracted_text = extract_scanned_pdf_text(
-                        uploaded_pdf,
+                        pdf_bytes,
                         dpi=ocr_dpi,
                         language=ocr_language
                     )
-                    message = "OCR text extraction completed."
+                    extraction_message = "OCR extraction completed."
 
                 else:
-                    extracted_text, message = auto_extract_pdf_text(
-                        uploaded_pdf,
+                    extracted_text, extraction_message = auto_extract_pdf_text(
+                        pdf_bytes,
                         dpi=ocr_dpi,
                         language=ocr_language
                     )
 
-                st.success(message)
+                extracted_text = clean_general_text(extracted_text)
 
-                if extracted_text.strip() == "":
-                    st.warning(
-                        "No text was extracted. The PDF may be unclear, handwritten, "
-                        "or OCR language may not be installed."
+            st.success(extraction_message)
+
+            if not extracted_text:
+                st.warning(
+                    "No text was extracted. The PDF may be handwritten, blurred, damaged, "
+                    "or the OCR language may not be installed."
+                )
+
+            else:
+                st.subheader("📌 Extracted Text Preview")
+
+                st.text_area(
+                    "Preview of extracted text",
+                    extracted_text[:10000],
+                    height=350
+                )
+
+                st.write(f"Total extracted characters: {len(extracted_text)}")
+
+                if output_type == "TXT File":
+                    txt_file = create_txt_file(extracted_text)
+
+                    st.download_button(
+                        label="⬇️ Download TXT File",
+                        data=txt_file,
+                        file_name="extracted_pdf_text.txt",
+                        mime="text/plain"
                     )
-                else:
-                    st.subheader("Extracted Text Preview")
-                    st.text_area(
-                        "Preview",
-                        extracted_text[:5000],
-                        height=300
+
+                elif output_type == "Word File":
+                    word_file = create_word_file(extracted_text)
+
+                    st.download_button(
+                        label="⬇️ Download Word File",
+                        data=word_file,
+                        file_name="extracted_pdf_text.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     )
 
-                    # TXT Download
-                    if output_type == "TXT File":
-                        txt_file = create_txt_file(extracted_text)
+        except pytesseract.TesseractNotFoundError:
+            st.error(
+                "Tesseract OCR is not installed or the path is incorrect. "
+                "Please install Tesseract and check the path in the code."
+            )
 
-                        st.download_button(
-                            label="Download TXT File",
-                            data=txt_file,
-                            file_name="extracted_pdf_text.txt",
-                            mime="text/plain"
-                        )
-
-                    # Word Download
-                    elif output_type == "Word File":
-                        word_file = create_word_file(extracted_text)
-
-                        st.download_button(
-                            label="Download Word File",
-                            data=word_file,
-                            file_name="extracted_pdf_text.docx",
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                        )
-
-            except Exception as e:
-                st.error("An error occurred while extracting text.")
-                st.exception(e)
+        except Exception as e:
+            st.error("An error occurred while extracting text.")
+            st.exception(e)
 
 else:
-    st.info("Please upload a PDF file to start.")
+    st.info("Please upload a PDF file to start extraction.")
