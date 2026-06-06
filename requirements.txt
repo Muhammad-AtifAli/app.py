@@ -13,6 +13,8 @@ beautifulsoup4
 opencv-python-headless
 ddgs
 huggingface_hub
+rembg
+onnxruntime
 
 
 
