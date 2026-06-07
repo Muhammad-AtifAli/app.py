@@ -15,6 +15,7 @@ ddgs
 huggingface_hub
 rembg
 onnxruntime
+Ghostscript
 
 
 
