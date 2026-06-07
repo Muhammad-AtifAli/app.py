@@ -15,7 +15,7 @@ ddgs
 huggingface_hub
 rembg
 onnxruntime
-gswin64c
+
 
 
 
