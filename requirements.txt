@@ -19,7 +19,7 @@ matplotlib
 networkx
 requests
 scikit-learn
-sklearn
+
 
 
 
