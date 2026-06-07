@@ -18,6 +18,8 @@ onnxruntime
 matplotlib
 networkx
 requests
+scikit-learn
+
 
 
 
