@@ -22,9 +22,7 @@ scikit-learn
 edge_tts
 streamlit-mic-recorder
 google-generativeai
-ghostscript
-tesseract-ocr
-tesseract-ocr-eng
+
 
 
 
