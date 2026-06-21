@@ -19,6 +19,8 @@ matplotlib
 networkx
 requests
 scikit-learn
+edgd_tts
+streamlit-mic-recorder
 google-generativeai
 
 
