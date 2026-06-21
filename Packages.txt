@@ -1,4 +1,1 @@
-ghostscript
-tesseract-ocr
-tesseract-ocr-eng
-tesseract-ocr-urd
+
