@@ -23,7 +23,7 @@ edge_tts
 streamlit-mic-recorder
 google-generativeai
 ocrmypdf
-tesseract-ocr
+tesseract
 ghostscript
 
 
