@@ -25,6 +25,7 @@ google-generativeai
 ocrmypdf
 tesseract
 ghostscript
+pypdfium2
 
 
 
