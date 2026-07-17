@@ -22,6 +22,9 @@ scikit-learn
 edge_tts
 streamlit-mic-recorder
 google-generativeai
+ocrmypdf
+gswin64c
+tesseract
 
 
 
