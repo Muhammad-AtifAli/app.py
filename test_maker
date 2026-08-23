@@ -1,0 +1,2810 @@
+import io
+import random
+import re
+from datetime import date
+from xml.sax.saxutils import escape
+
+import streamlit as st
+from docx import Document
+from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Inches, Pt
+
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.platypus import (
+    KeepTogether,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
+
+
+# =========================================================
+# STREAMLIT PAGE SETTINGS
+# =========================================================
+
+st.set_page_config(
+    page_title="Test Producer",
+    page_icon="📝",
+    layout="wide"
+)
+
+
+# =========================================================
+# QUESTION TYPES
+# =========================================================
+
+QUESTION_TYPES = [
+    "Multiple Choice (MCQ)",
+    "Fill in the Blanks",
+    "Short Question",
+    "Column Matching",
+    "Long Question",
+]
+
+
+SECTION_TITLES = {
+    "Multiple Choice (MCQ)": "Section A: Multiple Choice Questions",
+    "Fill in the Blanks": "Section B: Fill in the Blanks",
+    "Short Question": "Section C: Short Questions",
+    "Column Matching": "Section D: Match the Columns",
+    "Long Question": "Section E: Long Questions",
+}
+
+
+SECTION_INSTRUCTIONS = {
+    "Multiple Choice (MCQ)": "Choose the best answer.",
+    "Fill in the Blanks":
+        "Complete each blank with the most suitable answer.",
+    "Short Question":
+        "Answer briefly and precisely.",
+    "Column Matching":
+        "Match each item in Column A with the correct item in Column B.",
+    "Long Question":
+        "Answer in detail and organize your response clearly.",
+}
+
+
+# =========================================================
+# SESSION STATE
+# =========================================================
+
+if "questions" not in st.session_state:
+    st.session_state.questions = []
+
+if "next_id" not in st.session_state:
+    st.session_state.next_id = 1
+
+
+# =========================================================
+# GENERAL FUNCTIONS
+# =========================================================
+
+def add_question(question):
+
+    question["id"] = st.session_state.next_id
+
+    st.session_state.next_id += 1
+
+    st.session_state.questions.append(question)
+
+
+def grouped_questions():
+
+    groups = {
+        question_type: []
+        for question_type in QUESTION_TYPES
+    }
+
+    for question in st.session_state.questions:
+
+        groups[question["type"]].append(question)
+
+    return groups
+
+
+def total_marks():
+
+    return sum(
+        float(question["marks"])
+        for question in st.session_state.questions
+    )
+
+
+def format_marks(value):
+
+    value = float(value)
+
+    if value.is_integer():
+        return str(int(value))
+
+    return str(value)
+
+
+def safe_filename(text):
+
+    value = re.sub(
+        r"[^A-Za-z0-9_-]+",
+        "_",
+        text.strip()
+    )
+
+    return value.strip("_") or "test"
+
+
+def pdf_text(text):
+
+    return escape(
+        str(text)
+    ).replace(
+        "\n",
+        "<br/>"
+    )
+
+
+def shuffled_matching(question):
+
+    left_items = [
+        item[0]
+        for item in question["pairs"]
+    ]
+
+    right_items = [
+        item[1]
+        for item in question["pairs"]
+    ]
+
+    # Keep shuffling consistent for this particular question
+    random.Random(
+        question["id"]
+    ).shuffle(
+        right_items
+    )
+
+    return left_items, right_items
+
+
+# =========================================================
+# WORD DOCUMENT HEADER
+# =========================================================
+
+def word_header(
+    document,
+    info,
+    answer_key=False
+):
+
+    # School name
+    paragraph = document.add_paragraph()
+
+    paragraph.alignment = (
+        WD_ALIGN_PARAGRAPH.CENTER
+    )
+
+    run = paragraph.add_run(
+        info["school"] or "School / Institution"
+    )
+
+    run.bold = True
+    run.font.size = Pt(16)
+
+
+    # Test title
+    paragraph = document.add_paragraph()
+
+    paragraph.alignment = (
+        WD_ALIGN_PARAGRAPH.CENTER
+    )
+
+    run = paragraph.add_run(
+        info["title"] or "Test Paper"
+    )
+
+    run.bold = True
+    run.font.size = Pt(14)
+
+
+    # Answer key heading
+    if answer_key:
+
+        paragraph = document.add_paragraph()
+
+        paragraph.alignment = (
+            WD_ALIGN_PARAGRAPH.CENTER
+        )
+
+        run = paragraph.add_run(
+            "ANSWER KEY / TEACHER COPY"
+        )
+
+        run.bold = True
+
+
+    # Test information table
+    table = document.add_table(
+        rows=3,
+        cols=4
+    )
+
+    table.style = "Table Grid"
+
+    table.alignment = (
+        WD_TABLE_ALIGNMENT.CENTER
+    )
+
+
+    rows = [
+
+        (
+            "Subject",
+            info["subject"],
+            "Class",
+            info["grade"]
+        ),
+
+        (
+            "Date",
+            info["date"],
+            "Duration",
+            info["duration"]
+        ),
+
+        (
+            "Total Marks",
+            format_marks(
+                info["total_marks"]
+            ),
+            "Teacher",
+            info["teacher"]
+        ),
+    ]
+
+
+    for row_number, row_data in enumerate(rows):
+
+        for column_number, value in enumerate(row_data):
+
+            cell = table.cell(
+                row_number,
+                column_number
+            )
+
+            cell.text = str(value)
+
+            if column_number in (0, 2):
+
+                if cell.paragraphs[0].runs:
+
+                    cell.paragraphs[0].runs[0].bold = True
+
+
+    # Student information
+    if not answer_key:
+
+        paragraph = document.add_paragraph()
+
+        paragraph.add_run(
+            "Student Name: "
+        ).bold = True
+
+        paragraph.add_run(
+            "____________________________   "
+        )
+
+        paragraph.add_run(
+            "Roll No: "
+        ).bold = True
+
+        paragraph.add_run(
+            "____________"
+        )
+
+
+    # Instructions
+    if info["instructions"].strip():
+
+        paragraph = document.add_paragraph()
+
+        paragraph.add_run(
+            "General Instructions: "
+        ).bold = True
+
+        paragraph.add_run(
+            info["instructions"]
+        )
+
+
+# =========================================================
+# ADD QUESTION TO WORD DOCUMENT
+# =========================================================
+
+def word_question(
+    document,
+    question,
+    question_number,
+    answer_key=False
+):
+
+    # Main question
+    paragraph = document.add_paragraph()
+
+    paragraph.paragraph_format.space_after = Pt(3)
+
+    run = paragraph.add_run(
+
+        f"Q{question_number}. "
+        f"{question['text']} "
+        f"[{format_marks(question['marks'])} marks]"
+
+    )
+
+    run.bold = True
+
+
+    # -----------------------------------------------------
+    # MCQ
+    # -----------------------------------------------------
+
+    if question["type"] == "Multiple Choice (MCQ)":
+
+        for label, option in zip(
+            "ABCD",
+            question["options"]
+        ):
+
+            document.add_paragraph(
+                f"{label}. {option}"
+            )
+
+
+        if answer_key:
+
+            correct_index = "ABCD".index(
+                question["correct"]
+            )
+
+            paragraph = document.add_paragraph()
+
+            paragraph.add_run(
+
+                f"Answer: "
+                f"{question['correct']}. "
+                f"{question['options'][correct_index]}"
+
+            ).bold = True
+
+
+    # -----------------------------------------------------
+    # FILL IN THE BLANKS
+    # -----------------------------------------------------
+
+    elif question["type"] == "Fill in the Blanks":
+
+        if answer_key:
+
+            paragraph = document.add_paragraph()
+
+            paragraph.add_run(
+                f"Answer: {question['answer']}"
+            ).bold = True
+
+        else:
+
+            document.add_paragraph(
+                "Answer: ______________________________________________"
+            )
+
+
+    # -----------------------------------------------------
+    # SHORT QUESTION
+    # -----------------------------------------------------
+
+    elif question["type"] == "Short Question":
+
+        if answer_key:
+
+            paragraph = document.add_paragraph()
+
+            paragraph.add_run(
+                "Suggested answer: "
+            ).bold = True
+
+            paragraph.add_run(
+                question.get(
+                    "answer",
+                    ""
+                )
+            )
+
+        else:
+
+            number_of_lines = int(
+                question.get(
+                    "answer_lines",
+                    3
+                )
+            )
+
+            for _ in range(number_of_lines):
+
+                document.add_paragraph(
+                    "________________________________________________________________________________"
+                )
+
+
+    # -----------------------------------------------------
+    # COLUMN MATCHING
+    # -----------------------------------------------------
+
+    elif question["type"] == "Column Matching":
+
+        table = document.add_table(
+            rows=1,
+            cols=2
+        )
+
+        table.style = "Table Grid"
+
+        table.alignment = (
+            WD_TABLE_ALIGNMENT.CENTER
+        )
+
+
+        if answer_key:
+
+            table.cell(
+                0,
+                0
+            ).text = "Column A"
+
+            table.cell(
+                0,
+                1
+            ).text = "Correct Match"
+
+
+            for left, right in question["pairs"]:
+
+                row = table.add_row().cells
+
+                row[0].text = left
+                row[1].text = right
+
+
+        else:
+
+            table.cell(
+                0,
+                0
+            ).text = "Column A"
+
+            table.cell(
+                0,
+                1
+            ).text = "Column B"
+
+
+            left_items, right_items = shuffled_matching(
+                question
+            )
+
+
+            for index in range(
+                max(
+                    len(left_items),
+                    len(right_items)
+                )
+            ):
+
+                row = table.add_row().cells
+
+
+                if index < len(left_items):
+
+                    row[0].text = (
+                        f"{index + 1}. "
+                        f"{left_items[index]}"
+                    )
+
+
+                if index < len(right_items):
+
+                    row[1].text = (
+                        f"{chr(65 + index)}. "
+                        f"{right_items[index]}"
+                    )
+
+
+        # Bold table headings
+        for cell in table.rows[0].cells:
+
+            if cell.paragraphs[0].runs:
+
+                cell.paragraphs[0].runs[0].bold = True
+
+
+    # -----------------------------------------------------
+    # LONG QUESTION
+    # -----------------------------------------------------
+
+    elif question["type"] == "Long Question":
+
+        if answer_key:
+
+            paragraph = document.add_paragraph()
+
+            paragraph.add_run(
+                "Suggested answer / marking points: "
+            ).bold = True
+
+            paragraph.add_run(
+                question.get(
+                    "answer",
+                    ""
+                )
+            )
+
+        else:
+
+            number_of_lines = int(
+                question.get(
+                    "answer_lines",
+                    10
+                )
+            )
+
+            for _ in range(number_of_lines):
+
+                document.add_paragraph(
+                    "________________________________________________________________________________"
+                )
+
+
+    # Difficulty only shown in teacher copy
+    if answer_key:
+
+        paragraph = document.add_paragraph()
+
+        run = paragraph.add_run(
+
+            f"Difficulty: "
+            f"{question.get('difficulty', 'Not set')}"
+
+        )
+
+        run.italic = True
+        run.font.size = Pt(8)
+
+
+# =========================================================
+# CREATE WORD FILE
+# =========================================================
+
+def make_docx(
+    info,
+    answer_key=False
+):
+
+    document = Document()
+
+
+    # Page margins
+    for section in document.sections:
+
+        section.top_margin = Inches(0.55)
+
+        section.bottom_margin = Inches(0.55)
+
+        section.left_margin = Inches(0.65)
+
+        section.right_margin = Inches(0.65)
+
+
+    # Normal font
+    document.styles["Normal"].font.name = "Arial"
+
+    document.styles["Normal"].font.size = Pt(10.5)
+
+
+    word_header(
+        document,
+        info,
+        answer_key
+    )
+
+
+    question_number = 1
+
+
+    for question_type, questions in grouped_questions().items():
+
+        if not questions:
+            continue
+
+
+        # Section title
+        paragraph = document.add_paragraph()
+
+        run = paragraph.add_run(
+            SECTION_TITLES[
+                question_type
+            ]
+        )
+
+        run.bold = True
+        run.font.size = Pt(12)
+
+
+        # Section instruction
+        paragraph = document.add_paragraph()
+
+        run = paragraph.add_run(
+            SECTION_INSTRUCTIONS[
+                question_type
+            ]
+        )
+
+        run.italic = True
+
+
+        for question in questions:
+
+            word_question(
+                document,
+                question,
+                question_number,
+                answer_key
+            )
+
+            question_number += 1
+
+
+    output = io.BytesIO()
+
+    document.save(output)
+
+    return output.getvalue()
+
+
+# =========================================================
+# PDF PAGE NUMBER
+# =========================================================
+
+def page_number(
+    canvas,
+    document
+):
+
+    canvas.saveState()
+
+    canvas.setFont(
+        "Helvetica",
+        8
+    )
+
+    canvas.drawCentredString(
+
+        A4[0] / 2,
+
+        8 * mm,
+
+        f"Page {document.page}"
+
+    )
+
+    canvas.restoreState()
+
+
+# =========================================================
+# CREATE PDF
+# =========================================================
+
+def make_pdf(
+    info,
+    answer_key=False
+):
+
+    output = io.BytesIO()
+
+
+    document = SimpleDocTemplate(
+
+        output,
+
+        pagesize=A4,
+
+        leftMargin=14 * mm,
+
+        rightMargin=14 * mm,
+
+        topMargin=13 * mm,
+
+        bottomMargin=14 * mm,
+
+    )
+
+
+    styles = getSampleStyleSheet()
+
+
+    school_style = ParagraphStyle(
+
+        "SchoolStyle",
+
+        parent=styles["Heading1"],
+
+        fontSize=16,
+
+        alignment=TA_CENTER,
+
+        spaceAfter=3
+
+    )
+
+
+    title_style = ParagraphStyle(
+
+        "TitleStyle",
+
+        parent=styles["Title"],
+
+        fontSize=14,
+
+        alignment=TA_CENTER,
+
+        spaceAfter=5
+
+    )
+
+
+    section_style = ParagraphStyle(
+
+        "SectionStyle",
+
+        parent=styles["Heading2"],
+
+        fontSize=11,
+
+        spaceBefore=8,
+
+        spaceAfter=2
+
+    )
+
+
+    normal_style = ParagraphStyle(
+
+        "NormalStyle",
+
+        parent=styles["BodyText"],
+
+        fontSize=9.2,
+
+        leading=11.5,
+
+        spaceAfter=3
+
+    )
+
+
+    question_style = ParagraphStyle(
+
+        "QuestionStyle",
+
+        parent=normal_style,
+
+        fontName="Helvetica-Bold",
+
+        spaceBefore=5,
+
+        spaceAfter=3
+
+    )
+
+
+    small_style = ParagraphStyle(
+
+        "SmallStyle",
+
+        parent=normal_style,
+
+        fontSize=8.2,
+
+        leading=10
+
+    )
+
+
+    story = []
+
+
+    # School name
+    story.append(
+
+        Paragraph(
+
+            pdf_text(
+                info["school"]
+                or "School / Institution"
+            ),
+
+            school_style
+
+        )
+
+    )
+
+
+    # Test title
+    story.append(
+
+        Paragraph(
+
+            pdf_text(
+                info["title"]
+                or "Test Paper"
+            ),
+
+            title_style
+
+        )
+
+    )
+
+
+    # Answer key heading
+    if answer_key:
+
+        story.append(
+
+            Paragraph(
+
+                "<b>ANSWER KEY / TEACHER COPY</b>",
+
+                normal_style
+
+            )
+
+        )
+
+
+    # =====================================================
+    # INFORMATION TABLE
+    # =====================================================
+
+    table_data = [
+
+        [
+            "Subject",
+            info["subject"],
+            "Class",
+            info["grade"]
+        ],
+
+        [
+            "Date",
+            info["date"],
+            "Duration",
+            info["duration"]
+        ],
+
+        [
+            "Total Marks",
+            format_marks(
+                info["total_marks"]
+            ),
+            "Teacher",
+            info["teacher"]
+        ],
+
+    ]
+
+
+    formatted_data = []
+
+
+    for row in table_data:
+
+        formatted_row = []
+
+        for index, value in enumerate(row):
+
+            if index in (0, 2):
+
+                text = (
+                    f"<b>{pdf_text(value)}</b>"
+                )
+
+            else:
+
+                text = pdf_text(value)
+
+
+            formatted_row.append(
+
+                Paragraph(
+                    text,
+                    small_style
+                )
+
+            )
+
+
+        formatted_data.append(
+            formatted_row
+        )
+
+
+    info_table = Table(
+
+        formatted_data,
+
+        colWidths=[
+            25 * mm,
+            50 * mm,
+            27 * mm,
+            64 * mm
+        ]
+
+    )
+
+
+    info_table.setStyle(
+
+        TableStyle([
+
+            (
+                "GRID",
+                (0, 0),
+                (-1, -1),
+                0.5,
+                colors.grey
+            ),
+
+            (
+                "VALIGN",
+                (0, 0),
+                (-1, -1),
+                "MIDDLE"
+            ),
+
+            (
+                "BACKGROUND",
+                (0, 0),
+                (0, -1),
+                colors.whitesmoke
+            ),
+
+            (
+                "BACKGROUND",
+                (2, 0),
+                (2, -1),
+                colors.whitesmoke
+            ),
+
+            (
+                "LEFTPADDING",
+                (0, 0),
+                (-1, -1),
+                4
+            ),
+
+            (
+                "RIGHTPADDING",
+                (0, 0),
+                (-1, -1),
+                4
+            ),
+
+            (
+                "TOPPADDING",
+                (0, 0),
+                (-1, -1),
+                4
+            ),
+
+            (
+                "BOTTOMPADDING",
+                (0, 0),
+                (-1, -1),
+                4
+            ),
+
+        ])
+
+    )
+
+
+    story.append(
+        info_table
+    )
+
+    story.append(
+        Spacer(
+            1,
+            5
+        )
+    )
+
+
+    # Student name
+    if not answer_key:
+
+        story.append(
+
+            Paragraph(
+
+                "<b>Student Name:</b> "
+                "__________________________ "
+                "&nbsp;&nbsp; "
+                "<b>Roll No:</b> "
+                "____________",
+
+                normal_style
+
+            )
+
+        )
+
+
+    # General instructions
+    if info["instructions"].strip():
+
+        story.append(
+
+            Paragraph(
+
+                f"<b>General Instructions:</b> "
+                f"{pdf_text(info['instructions'])}",
+
+                normal_style
+
+            )
+
+        )
+
+
+    question_number = 1
+
+
+    # =====================================================
+    # QUESTIONS
+    # =====================================================
+
+    for question_type, questions in grouped_questions().items():
+
+        if not questions:
+            continue
+
+
+        # Section title
+        story.append(
+
+            Paragraph(
+
+                pdf_text(
+                    SECTION_TITLES[
+                        question_type
+                    ]
+                ),
+
+                section_style
+
+            )
+
+        )
+
+
+        # Section instruction
+        story.append(
+
+            Paragraph(
+
+                f"<i>"
+                f"{pdf_text(SECTION_INSTRUCTIONS[question_type])}"
+                f"</i>",
+
+                small_style
+
+            )
+
+        )
+
+
+        for question in questions:
+
+            block = []
+
+
+            # Question heading
+            block.append(
+
+                Paragraph(
+
+                    f"Q{question_number}. "
+                    f"{pdf_text(question['text'])} "
+                    f"<b>"
+                    f"[{format_marks(question['marks'])} marks]"
+                    f"</b>",
+
+                    question_style
+
+                )
+
+            )
+
+
+            # =================================================
+            # MCQ
+            # =================================================
+
+            if question["type"] == "Multiple Choice (MCQ)":
+
+                for label, option in zip(
+                    "ABCD",
+                    question["options"]
+                ):
+
+                    block.append(
+
+                        Paragraph(
+
+                            f"&nbsp;&nbsp;&nbsp;"
+                            f"{label}. "
+                            f"{pdf_text(option)}",
+
+                            normal_style
+
+                        )
+
+                    )
+
+
+                if answer_key:
+
+                    correct_index = (
+                        "ABCD".index(
+                            question["correct"]
+                        )
+                    )
+
+                    block.append(
+
+                        Paragraph(
+
+                            f"<b>Answer:</b> "
+                            f"{question['correct']}. "
+                            f"{pdf_text(question['options'][correct_index])}",
+
+                            normal_style
+
+                        )
+
+                    )
+
+
+            # =================================================
+            # FILL IN THE BLANK
+            # =================================================
+
+            elif question["type"] == "Fill in the Blanks":
+
+                if answer_key:
+
+                    text = (
+
+                        f"<b>Answer:</b> "
+                        f"{pdf_text(question['answer'])}"
+
+                    )
+
+                else:
+
+                    text = (
+                        "Answer: "
+                        "__________________________________________"
+                    )
+
+
+                block.append(
+
+                    Paragraph(
+                        text,
+                        normal_style
+                    )
+
+                )
+
+
+            # =================================================
+            # SHORT QUESTION
+            # =================================================
+
+            elif question["type"] == "Short Question":
+
+                if answer_key:
+
+                    block.append(
+
+                        Paragraph(
+
+                            f"<b>Suggested answer:</b> "
+                            f"{pdf_text(question.get('answer', ''))}",
+
+                            normal_style
+
+                        )
+
+                    )
+
+                else:
+
+                    number_of_lines = int(
+
+                        question.get(
+                            "answer_lines",
+                            3
+                        )
+
+                    )
+
+
+                    for _ in range(number_of_lines):
+
+                        block.append(
+
+                            Paragraph(
+
+                                "________________________________________________________________________________",
+
+                                small_style
+
+                            )
+
+                        )
+
+
+            # =================================================
+            # MATCHING
+            # =================================================
+
+            elif question["type"] == "Column Matching":
+
+                if answer_key:
+
+                    rows = [
+
+                        [
+                            "Column A",
+                            "Correct Match"
+                        ]
+
+                    ]
+
+
+                    rows += question["pairs"]
+
+
+                else:
+
+                    left_items, right_items = (
+                        shuffled_matching(
+                            question
+                        )
+                    )
+
+
+                    rows = [
+
+                        [
+                            "Column A",
+                            "Column B"
+                        ]
+
+                    ]
+
+
+                    for index in range(
+                        len(left_items)
+                    ):
+
+                        rows.append([
+
+                            f"{index + 1}. "
+                            f"{left_items[index]}",
+
+                            f"{chr(65 + index)}. "
+                            f"{right_items[index]}"
+
+                        ])
+
+
+                formatted_rows = []
+
+
+                for row_index, row in enumerate(rows):
+
+                    formatted_row = []
+
+
+                    for value in row:
+
+                        if row_index == 0:
+
+                            text = (
+                                f"<b>"
+                                f"{pdf_text(value)}"
+                                f"</b>"
+                            )
+
+                        else:
+
+                            text = pdf_text(
+                                value
+                            )
+
+
+                        formatted_row.append(
+
+                            Paragraph(
+                                text,
+                                small_style
+                            )
+
+                        )
+
+
+                    formatted_rows.append(
+                        formatted_row
+                    )
+
+
+                matching_table = Table(
+
+                    formatted_rows,
+
+                    colWidths=[
+                        82 * mm,
+                        82 * mm
+                    ],
+
+                    repeatRows=1
+
+                )
+
+
+                matching_table.setStyle(
+
+                    TableStyle([
+
+                        (
+                            "GRID",
+                            (0, 0),
+                            (-1, -1),
+                            0.45,
+                            colors.grey
+                        ),
+
+                        (
+                            "BACKGROUND",
+                            (0, 0),
+                            (-1, 0),
+                            colors.whitesmoke
+                        ),
+
+                        (
+                            "VALIGN",
+                            (0, 0),
+                            (-1, -1),
+                            "TOP"
+                        ),
+
+                        (
+                            "LEFTPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            5
+                        ),
+
+                        (
+                            "RIGHTPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            5
+                        ),
+
+                        (
+                            "TOPPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            4
+                        ),
+
+                        (
+                            "BOTTOMPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            4
+                        ),
+
+                    ])
+
+                )
+
+
+                block.append(
+                    matching_table
+                )
+
+
+            # =================================================
+            # LONG QUESTION
+            # =================================================
+
+            elif question["type"] == "Long Question":
+
+                if answer_key:
+
+                    block.append(
+
+                        Paragraph(
+
+                            f"<b>"
+                            f"Suggested answer / marking points:"
+                            f"</b> "
+                            f"{pdf_text(question.get('answer', ''))}",
+
+                            normal_style
+
+                        )
+
+                    )
+
+                else:
+
+                    number_of_lines = int(
+
+                        question.get(
+                            "answer_lines",
+                            10
+                        )
+
+                    )
+
+
+                    for _ in range(number_of_lines):
+
+                        block.append(
+
+                            Paragraph(
+
+                                "________________________________________________________________________________",
+
+                                small_style
+
+                            )
+
+                        )
+
+
+            # Difficulty in answer key
+            if answer_key:
+
+                block.append(
+
+                    Paragraph(
+
+                        f"<i>"
+                        f"Difficulty: "
+                        f"{pdf_text(question.get('difficulty', 'Not set'))}"
+                        f"</i>",
+
+                        small_style
+
+                    )
+
+                )
+
+
+            story.append(
+                KeepTogether(
+                    block
+                )
+            )
+
+            story.append(
+                Spacer(
+                    1,
+                    4
+                )
+            )
+
+            question_number += 1
+
+
+    document.build(
+
+        story,
+
+        onFirstPage=page_number,
+
+        onLaterPages=page_number
+
+    )
+
+
+    return output.getvalue()
+
+
+# =========================================================
+# MAIN APP
+# =========================================================
+
+st.title(
+    "📝 Test Producer"
+)
+
+st.caption(
+    "Create mixed-format test papers and export them as PDF or Word documents."
+)
+
+
+# =========================================================
+# SIDEBAR
+# =========================================================
+
+with st.sidebar:
+
+    st.header(
+        "Test Information"
+    )
+
+
+    school = st.text_input(
+        "School / Institution",
+        placeholder="ABC Public School"
+    )
+
+
+    title = st.text_input(
+        "Test title",
+        value="Class Test"
+    )
+
+
+    subject = st.text_input(
+        "Subject",
+        placeholder="English"
+    )
+
+
+    grade = st.text_input(
+        "Class / Grade",
+        placeholder="Grade 8"
+    )
+
+
+    teacher = st.text_input(
+        "Teacher",
+        placeholder="Teacher name"
+    )
+
+
+    test_date = st.date_input(
+        "Date",
+        value=date.today()
+    )
+
+
+    duration = st.text_input(
+        "Duration",
+        value="60 minutes"
+    )
+
+
+    instructions = st.text_area(
+
+        "General instructions",
+
+        value=(
+            "Attempt all questions. "
+            "Write clearly and manage your time carefully."
+        )
+
+    )
+
+
+    st.divider()
+
+
+    st.metric(
+        "Questions",
+        len(
+            st.session_state.questions
+        )
+    )
+
+
+    st.metric(
+        "Total marks",
+        format_marks(
+            total_marks()
+        )
+    )
+
+
+    if st.session_state.questions:
+
+        if st.button(
+            "Clear all questions",
+            width="stretch"
+        ):
+
+            st.session_state.questions = []
+
+            st.session_state.next_id = 1
+
+            st.rerun()
+
+
+# =========================================================
+# TEST INFORMATION DICTIONARY
+# =========================================================
+
+info = {
+
+    "school": school,
+
+    "title": title,
+
+    "subject": subject,
+
+    "grade": grade,
+
+    "teacher": teacher,
+
+    "date": test_date.strftime(
+        "%d %B %Y"
+    ),
+
+    "duration": duration,
+
+    "instructions": instructions,
+
+    "total_marks": total_marks(),
+
+}
+
+
+# =========================================================
+# MAIN TABS
+# =========================================================
+
+add_tab, bank_tab, preview_tab = st.tabs(
+
+    [
+
+        "➕ Add Questions",
+
+        "📚 Question Bank",
+
+        "👁️ Preview & Export"
+
+    ]
+
+)
+
+
+# =========================================================
+# ADD QUESTIONS TAB
+# =========================================================
+
+with add_tab:
+
+    st.subheader(
+        "Add a Question"
+    )
+
+
+    question_type = st.selectbox(
+
+        "Question type",
+
+        QUESTION_TYPES
+
+    )
+
+
+    # Matching pair count must remain outside form
+    if question_type == "Column Matching":
+
+        pair_count = st.slider(
+
+            "Number of matching pairs",
+
+            min_value=2,
+
+            max_value=10,
+
+            value=4
+
+        )
+
+    else:
+
+        pair_count = 0
+
+
+    with st.form(
+        "question_form",
+        clear_on_submit=True
+    ):
+
+        question_text = st.text_area(
+
+            "Question / instruction",
+
+            placeholder="Enter your question here..."
+
+        )
+
+
+        options = []
+
+        answer = ""
+
+        correct = "A"
+
+        pairs = []
+
+        answer_lines = 3
+
+
+        # =================================================
+        # MCQ INPUTS
+        # =================================================
+
+        if question_type == "Multiple Choice (MCQ)":
+
+            column1, column2 = st.columns(2)
+
+
+            with column1:
+
+                option_a = st.text_input(
+                    "Option A"
+                )
+
+                option_c = st.text_input(
+                    "Option C"
+                )
+
+
+            with column2:
+
+                option_b = st.text_input(
+                    "Option B"
+                )
+
+                option_d = st.text_input(
+                    "Option D"
+                )
+
+
+            options = [
+
+                option_a,
+
+                option_b,
+
+                option_c,
+
+                option_d
+
+            ]
+
+
+            correct = st.selectbox(
+
+                "Correct option",
+
+                list("ABCD")
+
+            )
+
+
+        # =================================================
+        # FILL BLANK INPUTS
+        # =================================================
+
+        elif question_type == "Fill in the Blanks":
+
+            answer = st.text_input(
+                "Correct answer"
+            )
+
+
+        # =================================================
+        # SHORT QUESTION INPUTS
+        # =================================================
+
+        elif question_type == "Short Question":
+
+            answer = st.text_area(
+
+                "Suggested answer / key points"
+
+            )
+
+
+            answer_lines = st.number_input(
+
+                "Answer lines",
+
+                min_value=2,
+
+                max_value=12,
+
+                value=3
+
+            )
+
+
+        # =================================================
+        # MATCHING INPUTS
+        # =================================================
+
+        elif question_type == "Column Matching":
+
+            st.caption(
+
+                "Enter the correct pairs. "
+                "Column B will automatically be shuffled "
+                "in the student test."
+
+            )
+
+
+            for index in range(
+                pair_count
+            ):
+
+                column1, column2 = st.columns(2)
+
+
+                with column1:
+
+                    left = st.text_input(
+
+                        f"Column A item {index + 1}",
+
+                        key=(
+                            f"left_"
+                            f"{pair_count}_"
+                            f"{index}"
+                        )
+
+                    )
+
+
+                with column2:
+
+                    right = st.text_input(
+
+                        f"Correct match {index + 1}",
+
+                        key=(
+                            f"right_"
+                            f"{pair_count}_"
+                            f"{index}"
+                        )
+
+                    )
+
+
+                pairs.append(
+                    (
+                        left,
+                        right
+                    )
+                )
+
+
+        # =================================================
+        # LONG QUESTION INPUTS
+        # =================================================
+
+        elif question_type == "Long Question":
+
+            answer = st.text_area(
+
+                "Suggested answer / marking points",
+
+                height=140
+
+            )
+
+
+            answer_lines = st.number_input(
+
+                "Answer lines",
+
+                min_value=5,
+
+                max_value=30,
+
+                value=10
+
+            )
+
+
+        # =================================================
+        # COMMON SETTINGS
+        # =================================================
+
+        column1, column2 = st.columns(2)
+
+
+        with column1:
+
+            if question_type in (
+
+                "Multiple Choice (MCQ)",
+
+                "Fill in the Blanks"
+
+            ):
+
+                default_marks = 1.0
+
+            else:
+
+                default_marks = 5.0
+
+
+            marks = st.number_input(
+
+                "Marks",
+
+                min_value=0.5,
+
+                value=default_marks,
+
+                step=0.5
+
+            )
+
+
+        with column2:
+
+            difficulty = st.selectbox(
+
+                "Difficulty",
+
+                [
+
+                    "Beginner",
+
+                    "Intermediate",
+
+                    "Advanced"
+
+                ]
+
+            )
+
+
+        submitted = st.form_submit_button(
+
+            "Add Question",
+
+            type="primary",
+
+            width="stretch"
+
+        )
+
+
+        # =================================================
+        # VALIDATION
+        # =================================================
+
+        if submitted:
+
+            error = None
+
+
+            if not question_text.strip():
+
+                error = (
+                    "Enter the question or instruction."
+                )
+
+
+            elif (
+                question_type
+                == "Multiple Choice (MCQ)"
+                and
+                not all(
+                    option.strip()
+                    for option in options
+                )
+            ):
+
+                error = (
+                    "Enter all four MCQ options."
+                )
+
+
+            elif (
+                question_type
+                == "Fill in the Blanks"
+                and
+                not answer.strip()
+            ):
+
+                error = (
+                    "Enter the correct answer."
+                )
+
+
+            elif question_type == "Column Matching":
+
+                pairs = [
+
+                    (
+                        left.strip(),
+                        right.strip()
+                    )
+
+                    for left, right in pairs
+
+                    if (
+                        left.strip()
+                        and
+                        right.strip()
+                    )
+
+                ]
+
+
+                if len(pairs) < 2:
+
+                    error = (
+
+                        "Enter at least two "
+                        "complete matching pairs."
+
+                    )
+
+
+            # =================================================
+            # ADD QUESTION
+            # =================================================
+
+            if error:
+
+                st.error(
+                    error
+                )
+
+
+            else:
+
+                question = {
+
+                    "type":
+                        question_type,
+
+                    "text":
+                        question_text.strip(),
+
+                    "marks":
+                        marks,
+
+                    "difficulty":
+                        difficulty
+
+                }
+
+
+                if question_type == "Multiple Choice (MCQ)":
+
+                    question.update({
+
+                        "options": [
+                            option.strip()
+                            for option in options
+                        ],
+
+                        "correct":
+                            correct
+
+                    })
+
+
+                elif question_type in (
+
+                    "Fill in the Blanks",
+
+                    "Short Question",
+
+                    "Long Question"
+
+                ):
+
+                    question.update({
+
+                        "answer":
+                            answer.strip()
+
+                    })
+
+
+                if question_type in (
+
+                    "Short Question",
+
+                    "Long Question"
+
+                ):
+
+                    question.update({
+
+                        "answer_lines":
+                            int(answer_lines)
+
+                    })
+
+
+                if question_type == "Column Matching":
+
+                    question.update({
+
+                        "pairs":
+                            pairs
+
+                    })
+
+
+                add_question(
+                    question
+                )
+
+
+                st.success(
+                    "Question added successfully."
+                )
+
+
+                st.rerun()
+
+
+# =========================================================
+# QUESTION BANK TAB
+# =========================================================
+
+with bank_tab:
+
+    st.subheader(
+        "Question Bank"
+    )
+
+
+    if not st.session_state.questions:
+
+        st.info(
+            "No questions have been added yet."
+        )
+
+
+    else:
+
+        question_number = 1
+
+
+        for (
+            question_type,
+            questions
+        ) in grouped_questions().items():
+
+
+            if not questions:
+                continue
+
+
+            st.markdown(
+
+                f"### "
+                f"{SECTION_TITLES[question_type]}"
+
+            )
+
+
+            for question in questions:
+
+                short_text = (
+                    question["text"][:90]
+                )
+
+
+                with st.expander(
+
+                    f"Q{question_number}. "
+                    f"{short_text} "
+                    f"| "
+                    f"{format_marks(question['marks'])} marks"
+
+                ):
+
+
+                    st.write(
+                        question["text"]
+                    )
+
+
+                    st.caption(
+
+                        f"Difficulty: "
+                        f"{question['difficulty']} "
+                        f"| "
+                        f"Marks: "
+                        f"{format_marks(question['marks'])}"
+
+                    )
+
+
+                    # -----------------------------------------
+                    # MCQ ANSWERS
+                    # -----------------------------------------
+
+                    if (
+                        question_type
+                        == "Multiple Choice (MCQ)"
+                    ):
+
+                        for label, option in zip(
+
+                            "ABCD",
+
+                            question["options"]
+
+                        ):
+
+                            if label == question["correct"]:
+
+                                icon = "✅"
+
+                            else:
+
+                                icon = "•"
+
+
+                            st.write(
+
+                                f"{icon} "
+                                f"{label}. "
+                                f"{option}"
+
+                            )
+
+
+                    # -----------------------------------------
+                    # NORMAL ANSWERS
+                    # -----------------------------------------
+
+                    elif question_type in (
+
+                        "Fill in the Blanks",
+
+                        "Short Question",
+
+                        "Long Question"
+
+                    ):
+
+                        st.write(
+
+                            "**Answer / key points:**",
+
+                            question.get(
+                                "answer",
+                                ""
+                            )
+
+                        )
+
+
+                    # -----------------------------------------
+                    # MATCHING ANSWERS
+                    # -----------------------------------------
+
+                    elif question_type == "Column Matching":
+
+                        st.table({
+
+                            "Column A": [
+
+                                item[0]
+
+                                for item in question["pairs"]
+
+                            ],
+
+                            "Correct Match": [
+
+                                item[1]
+
+                                for item in question["pairs"]
+
+                            ]
+
+                        })
+
+
+                    # Delete button
+                    if st.button(
+
+                        "Delete Question",
+
+                        key=(
+                            f"delete_"
+                            f"{question['id']}"
+                        )
+
+                    ):
+
+
+                        st.session_state.questions = [
+
+                            item
+
+                            for item
+                            in st.session_state.questions
+
+                            if (
+                                item["id"]
+                                !=
+                                question["id"]
+                            )
+
+                        ]
+
+
+                        st.rerun()
+
+
+                question_number += 1
+
+
+# =========================================================
+# PREVIEW AND EXPORT TAB
+# =========================================================
+
+with preview_tab:
+
+    st.subheader(
+        "Preview & Export"
+    )
+
+
+    if not st.session_state.questions:
+
+        st.info(
+            "Add at least one question first."
+        )
+
+
+    else:
+
+        info["total_marks"] = total_marks()
+
+
+        # =================================================
+        # SUMMARY
+        # =================================================
+
+        column1, column2, column3 = st.columns(3)
+
+
+        column1.metric(
+
+            "Questions",
+
+            len(
+                st.session_state.questions
+            )
+
+        )
+
+
+        column2.metric(
+
+            "Total Marks",
+
+            format_marks(
+                total_marks()
+            )
+
+        )
+
+
+        column3.metric(
+
+            "Sections",
+
+            sum(
+
+                bool(value)
+
+                for value
+                in grouped_questions().values()
+
+            )
+
+        )
+
+
+        # =================================================
+        # TEST HEADER
+        # =================================================
+
+        st.markdown(
+
+            f"## "
+            f"{school or 'School / Institution'}"
+
+        )
+
+
+        st.markdown(
+
+            f"### "
+            f"{title or 'Test Paper'}"
+
+        )
+
+
+        st.write(
+
+            f"**Subject:** "
+            f"{subject or '—'} "
+            f"| "
+            f"**Class:** "
+            f"{grade or '—'} "
+            f"| "
+            f"**Date:** "
+            f"{info['date']}"
+
+        )
+
+
+        st.write(
+
+            f"**Duration:** "
+            f"{duration or '—'} "
+            f"| "
+            f"**Total Marks:** "
+            f"{format_marks(total_marks())}"
+
+        )
+
+
+        if instructions.strip():
+
+            st.write(
+
+                f"**Instructions:** "
+                f"{instructions}"
+
+            )
+
+
+        st.divider()
+
+
+        # =================================================
+        # TEST PREVIEW
+        # =================================================
+
+        question_number = 1
+
+
+        for (
+            question_type,
+            questions
+        ) in grouped_questions().items():
+
+
+            if not questions:
+                continue
+
+
+            st.markdown(
+
+                f"### "
+                f"{SECTION_TITLES[question_type]}"
+
+            )
+
+
+            st.caption(
+
+                SECTION_INSTRUCTIONS[
+                    question_type
+                ]
+
+            )
+
+
+            for question in questions:
+
+                st.markdown(
+
+                    f"**Q{question_number}. "
+                    f"{question['text']}** "
+                    f"`["
+                    f"{format_marks(question['marks'])} marks"
+                    f"]`"
+
+                )
+
+
+                # -----------------------------------------
+                # MCQ
+                # -----------------------------------------
+
+                if (
+                    question_type
+                    == "Multiple Choice (MCQ)"
+                ):
+
+                    for label, option in zip(
+
+                        "ABCD",
+
+                        question["options"]
+
+                    ):
+
+                        st.write(
+
+                            f"{label}. "
+                            f"{option}"
+
+                        )
+
+
+                # -----------------------------------------
+                # FILL IN BLANK
+                # -----------------------------------------
+
+                elif question_type == "Fill in the Blanks":
+
+                    st.write(
+
+                        "Answer: "
+                        "______________________________"
+
+                    )
+
+
+                # -----------------------------------------
+                # MATCHING
+                # -----------------------------------------
+
+                elif question_type == "Column Matching":
+
+                    left_items, right_items = (
+                        shuffled_matching(
+                            question
+                        )
+                    )
+
+
+                    st.table({
+
+                        "Column A": [
+
+                            f"{index + 1}. {item}"
+
+                            for index, item
+                            in enumerate(
+                                left_items
+                            )
+
+                        ],
+
+                        "Column B": [
+
+                            f"{chr(65 + index)}. {item}"
+
+                            for index, item
+                            in enumerate(
+                                right_items
+                            )
+
+                        ]
+
+                    })
+
+
+                # -----------------------------------------
+                # SHORT QUESTION
+                # -----------------------------------------
+
+                elif question_type == "Short Question":
+
+                    for _ in range(2):
+
+                        st.write(
+                            "_" * 90
+                        )
+
+
+                # -----------------------------------------
+                # LONG QUESTION
+                # -----------------------------------------
+
+                elif question_type == "Long Question":
+
+                    for _ in range(4):
+
+                        st.write(
+                            "_" * 90
+                        )
+
+
+                question_number += 1
+
+
+        st.divider()
+
+
+        # =================================================
+        # EXPORT
+        # =================================================
+
+        st.markdown(
+            "### Export Test"
+        )
+
+
+        base_filename = safe_filename(
+
+            f"{title}_"
+            f"{subject}_"
+            f"{grade}"
+
+        )
+
+
+        # Student files
+        student_pdf = make_pdf(
+            info,
+            False
+        )
+
+        student_docx = make_docx(
+            info,
+            False
+        )
+
+
+        # Teacher answer key files
+        answer_pdf = make_pdf(
+            info,
+            True
+        )
+
+        answer_docx = make_docx(
+            info,
+            True
+        )
+
+
+        column1, column2 = st.columns(2)
+
+
+        # =================================================
+        # STUDENT DOWNLOADS
+        # =================================================
+
+        with column1:
+
+            st.markdown(
+                "#### 👨‍🎓 Student Paper"
+            )
+
+
+            st.download_button(
+
+                "⬇️ Download Student PDF",
+
+                data=student_pdf,
+
+                file_name=(
+                    f"{base_filename}_Student.pdf"
+                ),
+
+                mime="application/pdf",
+
+                width="stretch"
+
+            )
+
+
+            st.download_button(
+
+                "⬇️ Download Student Word",
+
+                data=student_docx,
+
+                file_name=(
+                    f"{base_filename}_Student.docx"
+                ),
+
+                mime=(
+                    "application/"
+                    "vnd.openxmlformats-officedocument."
+                    "wordprocessingml.document"
+                ),
+
+                width="stretch"
+
+            )
+
+
+        # =================================================
+        # ANSWER KEY DOWNLOADS
+        # =================================================
+
+        with column2:
+
+            st.markdown(
+                "#### 👨‍🏫 Answer Key"
+            )
+
+
+            st.download_button(
+
+                "⬇️ Download Answer Key PDF",
+
+                data=answer_pdf,
+
+                file_name=(
+                    f"{base_filename}_Answer_Key.pdf"
+                ),
+
+                mime="application/pdf",
+
+                width="stretch"
+
+            )
+
+
+            st.download_button(
+
+                "⬇️ Download Answer Key Word",
+
+                data=answer_docx,
+
+                file_name=(
+                    f"{base_filename}_Answer_Key.docx"
+                ),
+
+                mime=(
+                    "application/"
+                    "vnd.openxmlformats-officedocument."
+                    "wordprocessingml.document"
+                ),
+
+                width="stretch"
+
+            )
