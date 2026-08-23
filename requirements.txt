@@ -26,7 +26,8 @@ ocrmypdf
 tesseract
 ghostscript
 pypdfium2
-
+reportlab
+python-docx
 
 
 
